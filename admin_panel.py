@@ -25,31 +25,57 @@ st.set_page_config(
 @st.cache_resource
 def init_supabase():
     """Initialize Supabase client for read operations."""
-    # Try Streamlit secrets first (for production), then environment variables
-    supabase_url = st.secrets.get('SUPABASE_URL') or os.getenv('SUPABASE_URL')
-    supabase_key = st.secrets.get('SUPABASE_KEY') or os.getenv('SUPABASE_KEY')
-    
-    if not supabase_url or not supabase_key:
-        st.error("⚠️ SUPABASE_URL and SUPABASE_KEY must be set in Streamlit Secrets or .env file")
+    try:
+        # Try Streamlit secrets first (for production), then environment variables
+        try:
+            supabase_url = st.secrets['SUPABASE_URL']
+            supabase_key = st.secrets['SUPABASE_KEY']
+        except (KeyError, AttributeError):
+            # Fallback to environment variables
+            supabase_url = os.getenv('SUPABASE_URL')
+            supabase_key = os.getenv('SUPABASE_KEY')
+        
+        if not supabase_url or not supabase_key:
+            st.error("⚠️ SUPABASE_URL and SUPABASE_KEY must be set in Streamlit Secrets or .env file")
+            st.stop()
+            return None
+        
+        return create_client(supabase_url, supabase_key)
+    except Exception as e:
+        st.error(f"❌ Error initializing Supabase: {str(e)}")
         st.stop()
-    
-    return create_client(supabase_url, supabase_key)
+        return None
 
 @st.cache_resource
 def init_service_client():
     """Initialize Supabase client using the service_role key for writes."""
-    # Try Streamlit secrets first (for production), then environment variables
-    supabase_url = st.secrets.get('SUPABASE_URL') or os.getenv('SUPABASE_URL')
-    service_key = st.secrets.get('SUPABASE_SERVICE_KEY') or os.getenv('SUPABASE_SERVICE_KEY')
-    
-    if not supabase_url or not service_key:
-        st.warning("⚠️ SUPABASE_SERVICE_KEY not found. License creation will fail. Please add it to Streamlit Secrets.")
+    try:
+        # Try Streamlit secrets first (for production), then environment variables
+        try:
+            supabase_url = st.secrets['SUPABASE_URL']
+            service_key = st.secrets['SUPABASE_SERVICE_KEY']
+        except (KeyError, AttributeError):
+            # Fallback to environment variables
+            supabase_url = os.getenv('SUPABASE_URL')
+            service_key = os.getenv('SUPABASE_SERVICE_KEY')
+        
+        if not supabase_url or not service_key:
+            st.warning("⚠️ SUPABASE_SERVICE_KEY not found. License creation will fail. Please add it to Streamlit Secrets.")
+            return None
+        
+        return create_client(supabase_url, service_key)
+    except Exception as e:
+        st.warning(f"⚠️ Error initializing service client: {str(e)}")
         return None
-    
-    return create_client(supabase_url, service_key)
 
+# Initialize clients
 supabase = init_supabase()
 service_client = init_service_client()
+
+# Show connection status
+if supabase is None:
+    st.error("❌ Failed to connect to Supabase. Please check your configuration.")
+    st.stop()
 
 # Custom CSS for better styling
 st.markdown("""
@@ -84,11 +110,24 @@ st.markdown("""
 # Main Header
 st.markdown('<h1 class="main-header">🔐 License Management Dashboard</h1>', unsafe_allow_html=True)
 
-# Sidebar Navigation
-st.sidebar.title("Navigation")
+# Connection Status in Sidebar
+st.sidebar.title("🔐 Navigation")
+if supabase:
+    st.sidebar.success("✅ Connected to Supabase")
+else:
+    st.sidebar.error("❌ Not Connected")
+
+if service_client:
+    st.sidebar.success("✅ Service Key Available")
+else:
+    st.sidebar.warning("⚠️ Service Key Missing")
+
+st.sidebar.divider()
+
+# Page Navigation
 page = st.sidebar.radio(
     "Select Page",
-    ["📊 Dashboard", "➕ Create License", "👥 View All Licenses", "🚫 Revoke License", "📈 Statistics"]
+    ["📊 Dashboard", "➕ Create License", "👥 View All Licenses", "✅ Manage License", "📈 Statistics"]
 )
 
 # Helper Functions
@@ -104,6 +143,8 @@ def get_all_licenses():
 def get_active_licenses():
     """Fetch only active licenses."""
     try:
+        if supabase is None:
+            return []
         response = supabase.table('licenses')\
             .select('*')\
             .eq('is_active', True)\
@@ -111,7 +152,7 @@ def get_active_licenses():
             .execute()
         return response.data if response.data else []
     except Exception as e:
-        st.error(f"Error fetching active licenses: {str(e)}")
+        st.error(f"❌ Error fetching active licenses: {str(e)}")
         return []
 
 def create_license(client_name: str, duration_months: int, notes: Optional[str] = None) -> tuple:
@@ -147,12 +188,77 @@ def create_license(client_name: str, duration_months: int, notes: Optional[str] 
             error_msg = e.get('message', str(e))
         return False, None, error_msg
 
+def activate_license(license_key: str) -> tuple:
+    """Activate a license by setting is_active to True."""
+    try:
+        # Use service_client for UPDATE operations (bypasses RLS)
+        if service_client is None:
+            return False, "Service role key is missing. Please add SUPABASE_SERVICE_KEY to Streamlit Secrets."
+        
+        response = service_client.table('licenses')\
+            .update({'is_active': True})\
+            .eq('license_key', license_key)\
+            .execute()
+        
+        if response.data:
+            return True, f"License {license_key[:8]}... activated successfully!"
+        else:
+            return False, "License not found or already active"
+    except Exception as e:
+        return False, str(e)
+
+def extend_license(license_key: str, additional_months: int) -> tuple:
+    """Extend license expiration date by adding months."""
+    try:
+        if service_client is None:
+            return False, "Service role key is missing. Please add SUPABASE_SERVICE_KEY to Streamlit Secrets."
+        
+        # Get current license
+        response = service_client.table('licenses')\
+            .select('expiration_date')\
+            .eq('license_key', license_key)\
+            .execute()
+        
+        if not response.data:
+            return False, "License not found"
+        
+        current_expiration = response.data[0].get('expiration_date')
+        if current_expiration:
+            # Parse current expiration date
+            if isinstance(current_expiration, str):
+                current_date = datetime.fromisoformat(current_expiration.split('T')[0]).date()
+            else:
+                current_date = current_expiration
+            
+            # Add months to current expiration (or use today if expired)
+            if current_date < date.today():
+                new_expiration = date.today() + timedelta(days=additional_months * 30)
+            else:
+                new_expiration = current_date + timedelta(days=additional_months * 30)
+            
+            # Update expiration date
+            update_response = service_client.table('licenses')\
+                .update({'expiration_date': new_expiration.isoformat()})\
+                .eq('license_key', license_key)\
+                .execute()
+            
+            if update_response.data:
+                return True, f"License extended successfully! New expiration: {new_expiration}"
+            else:
+                return False, "Failed to update license"
+        else:
+            return False, "Invalid license data"
+    except Exception as e:
+        return False, str(e)
+
 def revoke_license(license_key: str) -> tuple:
     """Revoke a license by setting is_active to False."""
     try:
         # Use service_client for UPDATE operations (bypasses RLS)
-        target_client = service_client if service_client else supabase
-        response = target_client.table('licenses')\
+        if service_client is None:
+            return False, "Service role key is missing. Please add SUPABASE_SERVICE_KEY to Streamlit Secrets."
+        
+        response = service_client.table('licenses')\
             .update({'is_active': False})\
             .eq('license_key', license_key)\
             .execute()
@@ -161,6 +267,88 @@ def revoke_license(license_key: str) -> tuple:
             return True, "License revoked successfully"
         else:
             return False, "License not found or already revoked"
+    except Exception as e:
+        return False, str(e)
+
+def delete_license(license_key: str) -> tuple:
+    """Permanently delete a license from the database."""
+    try:
+        if service_client is None:
+            return False, "Service role key is missing. Please add SUPABASE_SERVICE_KEY to Streamlit Secrets."
+        
+        response = service_client.table('licenses')\
+            .delete()\
+            .eq('license_key', license_key)\
+            .execute()
+        
+        if response.data:
+            return True, "License deleted successfully"
+        else:
+            return False, "License not found"
+    except Exception as e:
+        return False, str(e)
+
+def unlink_device(license_key: str) -> tuple:
+    """Unlink device (HWID) from a license, allowing it to be activated on another device."""
+    try:
+        if service_client is None:
+            return False, "Service role key is missing. Please add SUPABASE_SERVICE_KEY to Streamlit Secrets."
+        
+        response = service_client.table('licenses')\
+            .update({'hwid': None})\
+            .eq('license_key', license_key)\
+            .execute()
+        
+        if response.data:
+            return True, "Device unlinked successfully. License can now be activated on another device."
+        else:
+            return False, "License not found"
+    except Exception as e:
+        return False, str(e)
+
+def reset_license(license_key: str) -> tuple:
+    """Reset license: activate it, unlink device, and extend if expired."""
+    try:
+        if service_client is None:
+            return False, "Service role key is missing. Please add SUPABASE_SERVICE_KEY to Streamlit Secrets."
+        
+        # Get current license
+        response = service_client.table('licenses')\
+            .select('*')\
+            .eq('license_key', license_key)\
+            .execute()
+        
+        if not response.data:
+            return False, "License not found"
+        
+        license_data = response.data[0]
+        updates = {
+            'is_active': True,
+            'hwid': None
+        }
+        
+        # Check if expired and extend by 1 month if so
+        exp_date_str = license_data.get('expiration_date')
+        if exp_date_str:
+            if isinstance(exp_date_str, str):
+                exp_date = datetime.fromisoformat(exp_date_str.split('T')[0]).date()
+            else:
+                exp_date = exp_date_str
+            
+            if exp_date < date.today():
+                # Extend by 1 month from today
+                updates['expiration_date'] = (date.today() + timedelta(days=30)).isoformat()
+        
+        # Apply updates
+        update_response = service_client.table('licenses')\
+            .update(updates)\
+            .eq('license_key', license_key)\
+            .execute()
+        
+        if update_response.data:
+            return True, "License reset successfully: activated, device unlinked, and extended if expired."
+        else:
+            return False, "Failed to reset license"
     except Exception as e:
         return False, str(e)
 
@@ -339,43 +527,189 @@ elif page == "👥 View All Licenses":
     else:
         st.info("No licenses found matching your criteria.")
 
-# Revoke License Page
-elif page == "🚫 Revoke License":
-    st.header("🚫 Revoke License")
-    st.warning("⚠️ Revoking a license will immediately deactivate it. This action can be reversed by reactivating the license.")
+# Manage License Page
+elif page == "✅ Manage License":
+    st.header("✅ Manage License")
     
-    # Get all active licenses for selection
-    active_licenses = get_active_licenses()
+    # Get all licenses
+    all_licenses = get_all_licenses()
     
-    if active_licenses:
+    if all_licenses:
         license_options = {
-            f"{l.get('client_name')} - {l.get('license_key')[:36]}...": l.get('license_key')
-            for l in active_licenses
+            f"{l.get('client_name')} - {l.get('license_key')[:36]}... ({'🟢 Active' if l.get('is_active') else '🔴 Inactive'})": l.get('license_key')
+            for l in all_licenses
         }
         
-        selected_license_display = st.selectbox("Select License to Revoke", list(license_options.keys()))
+        selected_license_display = st.selectbox("Select License", list(license_options.keys()))
         selected_license_key = license_options[selected_license_display]
         
         # Show license details
-        selected_license = next(l for l in active_licenses if l.get('license_key') == selected_license_key)
+        selected_license = next(l for l in all_licenses if l.get('license_key') == selected_license_key)
         
-        st.info(f"""
-        **Client:** {selected_license.get('client_name')}  
-        **License Key:** `{selected_license.get('license_key')}`  
-        **HWID:** {selected_license.get('hwid') or 'Not activated'}  
-        **Expiration:** {selected_license.get('expiration_date')}
-        """)
+        # License Details Card
+        st.subheader("📋 License Details")
+        col1, col2 = st.columns(2)
         
-        if st.button("🚫 Revoke License", type="primary"):
-            with st.spinner("Revoking license..."):
-                success, message = revoke_license(selected_license_key)
-                if success:
-                    st.success(f"✅ {message}")
-                    st.rerun()
+        with col1:
+            st.info(f"""
+            **Client:** {selected_license.get('client_name')}  
+            **License Key:** `{selected_license.get('license_key')}`  
+            **HWID:** {selected_license.get('hwid') or '❌ Not activated'}
+            **Created:** {selected_license.get('created_at', 'N/A')[:10] if selected_license.get('created_at') else 'N/A'}
+            """)
+        
+        with col2:
+            exp_date_str = selected_license.get('expiration_date')
+            if exp_date_str:
+                if isinstance(exp_date_str, str):
+                    exp_date = datetime.fromisoformat(exp_date_str.split('T')[0]).date()
                 else:
-                    st.error(f"❌ {message}")
+                    exp_date = exp_date_str
+                days_left = (exp_date - date.today()).days
+            else:
+                exp_date = None
+                days_left = 0
+            
+            status_icon = "🟢" if selected_license.get('is_active') and days_left > 0 else "🔴"
+            status_text = "Active" if selected_license.get('is_active') and days_left > 0 else "Inactive"
+            
+            st.info(f"""
+            **Status:** {status_icon} {status_text}  
+            **Expiration:** {exp_date or 'N/A'}  
+            **Days Left:** {days_left} days
+            **Notes:** {selected_license.get('notes') or 'None'}
+            """)
+        
+        st.divider()
+        
+        # Action Buttons Section
+        st.subheader("⚙️ License Actions")
+        
+        # Show current status
+        is_active = selected_license.get('is_active', False)
+        if is_active:
+            st.success("✅ License is currently ACTIVE")
+        else:
+            st.warning("⚠️ License is currently INACTIVE")
+        
+        # Row 1: Activate/Revoke - Always show buttons
+        col_act, col_rev = st.columns(2)
+        
+        with col_act:
+            if st.button("✅ Activate License", type="primary", use_container_width=True, 
+                        disabled=is_active, help="Activate this license"):
+                with st.spinner("Activating license..."):
+                    success, message = activate_license(selected_license_key)
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {message}")
+        
+        with col_rev:
+            if st.button("🚫 Revoke License", type="secondary", use_container_width=True,
+                        disabled=not is_active, help="Revoke (deactivate) this license"):
+                with st.spinner("Revoking license..."):
+                    success, message = revoke_license(selected_license_key)
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {message}")
+        
+        st.divider()
+        
+        # Row 2: Extend License
+        st.subheader("📅 Extend License Duration")
+        col_ext1, col_ext2, col_ext3 = st.columns([2, 1, 1])
+        
+        with col_ext1:
+            extend_months = st.number_input("Add Months", min_value=1, max_value=120, value=1, step=1, key="extend_months")
+            st.caption(f"Will add {extend_months * 30} days to the license")
+        
+        with col_ext2:
+            st.write("")  # Spacing
+            st.write("")  # Spacing
+            if st.button("📅 Extend License", type="primary", use_container_width=True):
+                with st.spinner(f"Extending license by {extend_months} month(s)..."):
+                    success, message = extend_license(selected_license_key, extend_months)
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {message}")
+        
+        with col_ext3:
+            st.write("")  # Spacing
+            st.write("")  # Spacing
+            if st.button("🔄 Reset License", type="secondary", use_container_width=True, help="Activate, unlink device, and extend if expired"):
+                with st.spinner("Resetting license..."):
+                    success, message = reset_license(selected_license_key)
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {message}")
+        
+        st.divider()
+        
+        # Row 3: Device Management
+        st.subheader("🔗 Device Management")
+        
+        # Show device info
+        current_hwid = selected_license.get('hwid')
+        if current_hwid:
+            st.info(f"**Current Device:** `{current_hwid}`")
+        else:
+            st.info("**Current Device:** ❌ Not linked to any device")
+        
+        # Unlink button - always visible
+        col_dev1, col_dev2 = st.columns([1, 1])
+        with col_dev1:
+            if st.button("🔓 Unlink Device", type="secondary", use_container_width=True, 
+                       disabled=not current_hwid,
+                       help="Unlink current device. License can be activated on another device."):
+                with st.spinner("Unlinking device..."):
+                    success, message = unlink_device(selected_license_key)
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {message}")
+        
+        with col_dev2:
+            st.write("")  # Spacing
+        
+        st.divider()
+        
+        # Row 4: Dangerous Actions
+        st.subheader("⚠️ Dangerous Actions")
+        st.warning("⚠️ **Warning:** These actions cannot be undone!")
+        
+        col_del1, col_del2 = st.columns([3, 1])
+        
+        with col_del1:
+            st.error("**Delete License:** This will permanently delete the license from the database.")
+        
+        with col_del2:
+            if st.button("🗑️ Delete License", type="primary", use_container_width=True):
+                # Confirmation
+                st.error("⚠️ **Are you sure?** This action cannot be undone!")
+                col_confirm1, col_confirm2 = st.columns(2)
+                with col_confirm1:
+                    if st.button("✅ Yes, Delete Permanently", type="primary", use_container_width=True):
+                        with st.spinner("Deleting license..."):
+                            success, message = delete_license(selected_license_key)
+                            if success:
+                                st.success(f"✅ {message}")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {message}")
+                with col_confirm2:
+                    if st.button("❌ Cancel", use_container_width=True):
+                        st.rerun()
     else:
-        st.info("No active licenses to revoke.")
+        st.info("No licenses found in database.")
 
 # Statistics Page
 elif page == "📈 Statistics":
