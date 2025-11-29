@@ -12,7 +12,7 @@ from supabase import create_client, Client
 import uuid
 
 # Load environment variables
-load_dotenv()
+load_dotenv('config.env')
 
 # Page configuration
 st.set_page_config(
@@ -289,31 +289,28 @@ elif page == "👥 View All Licenses":
     if filtered_licenses:
         st.write(f"**Found {len(filtered_licenses)} license(s)**")
         
-        # Create DataFrame-like display
-        import pandas as pd
-        display_data = []
+        # Display licenses in table format
         for license in filtered_licenses:
             exp_date_str = license.get('expiration_date', '')
             if exp_date_str:
                 exp_date = datetime.fromisoformat(exp_date_str.split('T')[0]).date()
                 days_left = (exp_date - date.today()).days
-                status = "Active" if license.get('is_active') and days_left > 0 else "Expired" if days_left < 0 else "Revoked"
+                status = "🟢 Active" if license.get('is_active') and days_left > 0 else "🔴 Expired" if days_left < 0 else "⚪ Revoked"
             else:
-                status = "Unknown"
+                status = "❓ Unknown"
                 days_left = 0
             
-            display_data.append({
-                'Client Name': license.get('client_name', 'N/A'),
-                'License Key': license.get('license_key', 'N/A')[:36] + '...',
-                'HWID': license.get('hwid', 'Not activated')[:20] + '...' if license.get('hwid') else 'Not activated',
-                'Expiration': license.get('expiration_date', 'N/A'),
-                'Days Left': days_left,
-                'Status': status,
-                'Created': license.get('created_at', 'N/A')[:10] if license.get('created_at') else 'N/A'
-            })
-        
-        df = pd.DataFrame(display_data)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+            with st.expander(f"{license.get('client_name', 'N/A')} - {status}"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**License Key:** `{license.get('license_key', 'N/A')}`")
+                    st.write(f"**Client:** {license.get('client_name', 'N/A')}")
+                    st.write(f"**HWID:** {license.get('hwid') or 'Not activated'}")
+                with col2:
+                    st.write(f"**Status:** {status}")
+                    st.write(f"**Expiration:** {license.get('expiration_date', 'N/A')}")
+                    st.write(f"**Days Left:** {days_left}")
+                    st.write(f"**Created:** {license.get('created_at', 'N/A')[:10] if license.get('created_at') else 'N/A'}")
     else:
         st.info("No licenses found matching your criteria.")
 
@@ -366,12 +363,13 @@ elif page == "📈 Statistics":
     
     with col1:
         st.subheader("License Distribution")
-        import pandas as pd
-        chart_data = pd.DataFrame({
-            'Status': ['Active', 'Expired', 'Revoked'],
-            'Count': [stats['active'], stats['expired'], stats['revoked']]
-        })
-        st.bar_chart(chart_data.set_index('Status'))
+        # Simple chart data without pandas
+        chart_data = {
+            'Active': stats['active'],
+            'Expired': stats['expired'], 
+            'Revoked': stats['revoked']
+        }
+        st.bar_chart(chart_data)
     
     with col2:
         st.subheader("Quick Stats")
@@ -403,8 +401,8 @@ elif page == "📈 Statistics":
                         })
         
         if expiring_licenses:
-            expiring_df = pd.DataFrame(expiring_licenses)
-            st.dataframe(expiring_df, use_container_width=True, hide_index=True)
+            for exp_license in expiring_licenses:
+                st.warning(f"**{exp_license['Client']}** - Expires in **{exp_license['Days Left']} days** ({exp_license['Expiration Date']})")
 
 # Footer
 st.divider()
