@@ -173,10 +173,10 @@ def get_active_licenses():
         return response.data if response.data else []
     except Exception as e:
         error_msg = str(e)
-        # Check if it's an API key error
-        if '401' in error_msg or 'Invalid API key' in error_msg or 'Unauthorized' in error_msg:
-            st.error("❌ Invalid API Key. Please check your SUPABASE_KEY in Streamlit Secrets.")
-            st.info("Go to: Settings → Secrets → Add SUPABASE_KEY")
+        # Check if it's an API key error - don't show duplicate error
+        if '401' in error_msg or 'Invalid API key' in error_msg or 'Unauthorized' in error_msg or 'JSON could not be generated' in error_msg:
+            # Error already shown by get_all_licenses, skip
+            pass
         else:
             st.error(f"❌ Error fetching active licenses: {error_msg}")
         return []
@@ -431,6 +431,11 @@ if page == "📊 Dashboard":
     
     # Recent licenses
     st.subheader("Recent Licenses")
+    
+    # Reset error flag when page changes
+    if 'api_key_error_shown' in st.session_state:
+        del st.session_state['api_key_error_shown']
+    
     all_licenses = get_all_licenses()[:10]  # Show last 10
     
     if all_licenses:
