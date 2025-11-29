@@ -147,7 +147,7 @@ st.sidebar.divider()
 # Page Navigation
 page = st.sidebar.radio(
     "Select Page",
-    ["📊 Dashboard", "➕ Create License", "👥 View All Licenses", "✅ Manage License", "📈 Statistics"]
+    ["📊 Dashboard", "➕ Create License", "👥 View All Licenses", "🔑 Control License Key", "✅ Manage License", "📈 Statistics"]
 )
 
 # Helper Functions
@@ -569,6 +569,202 @@ elif page == "👥 View All Licenses":
                     st.write(f"**Created:** {license.get('created_at', 'N/A')[:10] if license.get('created_at') else 'N/A'}")
     else:
         st.info("No licenses found matching your criteria.")
+
+# Control License Key Page (New dedicated page)
+elif page == "🔑 Control License Key":
+    st.header("🔑 Control License Key")
+    st.markdown("---")
+    
+    # Get all licenses
+    all_licenses = get_all_licenses()
+    
+    if not all_licenses:
+        st.info("📋 No licenses found in database.")
+        st.info("💡 **Tip:** Create a license first using the '➕ Create License' page.")
+        if supabase is None:
+            st.error("❌ **Connection Issue:** Supabase client is not initialized. Please check your API keys.")
+        elif service_client is None:
+            st.warning("⚠️ **Service Key Missing:** You need SUPABASE_SERVICE_KEY to create licenses.")
+    else:
+        # License Selection
+        st.subheader("📋 Select License")
+        license_options = {
+            f"{l.get('client_name')} - {l.get('license_key')[:36]}... ({'🟢 Active' if l.get('is_active') else '🔴 Inactive'})": l.get('license_key')
+            for l in all_licenses
+        }
+        
+        selected_license_display = st.selectbox("Choose License to Control", list(license_options.keys()), key="control_license_select")
+        selected_license_key = license_options[selected_license_display]
+        
+        # Get selected license details
+        selected_license = next(l for l in all_licenses if l.get('license_key') == selected_license_key)
+        
+        # Display License Info
+        st.markdown("---")
+        st.subheader("📊 License Information")
+        
+        col_info1, col_info2 = st.columns(2)
+        
+        with col_info1:
+            st.markdown(f"""
+            **👤 Client Name:** {selected_license.get('client_name', 'N/A')}  
+            **🔑 License Key:** `{selected_license.get('license_key')}`  
+            **🖥️ HWID:** {selected_license.get('hwid') or '❌ Not activated'}  
+            **📅 Created:** {selected_license.get('created_at', 'N/A')[:10] if selected_license.get('created_at') else 'N/A'}
+            """)
+        
+        with col_info2:
+            exp_date_str = selected_license.get('expiration_date')
+            if exp_date_str:
+                if isinstance(exp_date_str, str):
+                    exp_date = datetime.fromisoformat(exp_date_str.split('T')[0]).date()
+                else:
+                    exp_date = exp_date_str
+                days_left = (exp_date - date.today()).days
+            else:
+                exp_date = None
+                days_left = 0
+            
+            is_active = selected_license.get('is_active', False)
+            status_icon = "🟢" if is_active and days_left > 0 else "🔴"
+            status_text = "Active" if is_active and days_left > 0 else "Inactive"
+            
+            st.markdown(f"""
+            **📊 Status:** {status_icon} {status_text}  
+            **⏰ Expiration:** {exp_date or 'N/A'}  
+            **📆 Days Left:** {days_left} days  
+            **📝 Notes:** {selected_license.get('notes') or 'None'}
+            """)
+        
+        st.markdown("---")
+        
+        # Control Actions
+        st.subheader("⚙️ Control Actions")
+        
+        # Status Control
+        st.markdown("### 🎛️ Status Control")
+        col_status1, col_status2 = st.columns(2)
+        
+        with col_status1:
+            if is_active:
+                st.success("✅ License is currently **ACTIVE**")
+                if st.button("🚫 Deactivate License", type="primary", use_container_width=True, key="deactivate_btn"):
+                    with st.spinner("Deactivating license..."):
+                        success, message = revoke_license(selected_license_key)
+                        if success:
+                            st.success(f"✅ {message}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {message}")
+            else:
+                st.warning("⚠️ License is currently **INACTIVE**")
+                if st.button("✅ Activate License", type="primary", use_container_width=True, key="activate_btn"):
+                    with st.spinner("Activating license..."):
+                        success, message = activate_license(selected_license_key)
+                        if success:
+                            st.success(f"✅ {message}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {message}")
+        
+        with col_status2:
+            st.info("💡 **Tip:** Activate/Deactivate controls whether the license can be used.")
+        
+        st.markdown("---")
+        
+        # Duration Control
+        st.markdown("### 📅 Duration Control")
+        col_dur1, col_dur2, col_dur3 = st.columns([2, 1, 1])
+        
+        with col_dur1:
+            extend_months = st.number_input("Add Months", min_value=1, max_value=120, value=1, step=1, key="extend_months_control")
+            st.caption(f"Will add {extend_months * 30} days to the license")
+        
+        with col_dur2:
+            st.write("")  # Spacing
+            st.write("")  # Spacing
+            if st.button("📅 Extend License", type="primary", use_container_width=True, key="extend_btn"):
+                with st.spinner(f"Extending license by {extend_months} month(s)..."):
+                    success, message = extend_license(selected_license_key, extend_months)
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {message}")
+        
+        with col_dur3:
+            st.write("")  # Spacing
+            st.write("")  # Spacing
+            if st.button("🔄 Reset License", type="secondary", use_container_width=True, key="reset_btn", 
+                        help="Activate, unlink device, and extend if expired"):
+                with st.spinner("Resetting license..."):
+                    success, message = reset_license(selected_license_key)
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {message}")
+        
+        st.markdown("---")
+        
+        # Device Control
+        st.markdown("### 🔗 Device Control")
+        current_hwid = selected_license.get('hwid')
+        
+        col_dev1, col_dev2 = st.columns([2, 1])
+        
+        with col_dev1:
+            if current_hwid:
+                st.info(f"**Current Device:** `{current_hwid}`")
+                st.caption("This license is linked to a specific device (HWID)")
+            else:
+                st.info("**Current Device:** ❌ Not linked to any device")
+                st.caption("This license can be activated on any device")
+        
+        with col_dev2:
+            st.write("")  # Spacing
+            st.write("")  # Spacing
+            if st.button("🔓 Unlink Device", type="secondary", use_container_width=True, key="unlink_btn",
+                        disabled=not current_hwid,
+                        help="Unlink current device. License can be activated on another device."):
+                with st.spinner("Unlinking device..."):
+                    success, message = unlink_device(selected_license_key)
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {message}")
+        
+        st.markdown("---")
+        
+        # Dangerous Actions
+        st.markdown("### ⚠️ Dangerous Actions")
+        st.warning("⚠️ **Warning:** These actions cannot be undone!")
+        
+        col_del1, col_del2 = st.columns([3, 1])
+        
+        with col_del1:
+            st.error("**🗑️ Delete License:** This will permanently delete the license from the database.")
+            st.caption("All data associated with this license will be lost forever.")
+        
+        with col_del2:
+            st.write("")  # Spacing
+            if st.button("🗑️ Delete License", type="primary", use_container_width=True, key="delete_btn"):
+                # Confirmation
+                st.error("⚠️ **Are you sure?** This action cannot be undone!")
+                col_confirm1, col_confirm2 = st.columns(2)
+                with col_confirm1:
+                    if st.button("✅ Yes, Delete Permanently", type="primary", use_container_width=True, key="confirm_delete"):
+                        with st.spinner("Deleting license..."):
+                            success, message = delete_license(selected_license_key)
+                            if success:
+                                st.success(f"✅ {message}")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {message}")
+                with col_confirm2:
+                    if st.button("❌ Cancel", use_container_width=True, key="cancel_delete"):
+                        st.rerun()
 
 # Manage License Page
 elif page == "✅ Manage License":
