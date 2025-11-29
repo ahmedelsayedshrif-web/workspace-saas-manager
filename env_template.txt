@@ -1,0 +1,10 @@
+# Supabase Configuration Template
+# Copy these variables to a .env file and fill in your actual credentials
+
+SUPABASE_URL=your_supabase_project_url_here
+SUPABASE_KEY=your_supabase_anon_key_here
+
+# Note: For admin panel operations, you might need the service_role key
+# Keep it secure and never commit it to version control
+# SUPABASE_SERVICE_KEY=your_service_role_key_here
+
