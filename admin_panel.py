@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 import uuid
 
-# Load environment variables
+# Load environment variables (for local development)
 load_dotenv('config.env')
 
 # Page configuration
@@ -24,17 +24,32 @@ st.set_page_config(
 # Initialize Supabase connection
 @st.cache_resource
 def init_supabase():
-    """Initialize Supabase client."""
-    supabase_url = os.getenv('SUPABASE_URL')
-    supabase_key = os.getenv('SUPABASE_KEY') or os.getenv('SUPABASE_SERVICE_KEY')
+    """Initialize Supabase client for read operations."""
+    # Try Streamlit secrets first (for production), then environment variables
+    supabase_url = st.secrets.get('SUPABASE_URL') or os.getenv('SUPABASE_URL')
+    supabase_key = st.secrets.get('SUPABASE_KEY') or os.getenv('SUPABASE_KEY')
     
     if not supabase_url or not supabase_key:
-        st.error("⚠️ SUPABASE_URL and SUPABASE_KEY must be set in .env file")
+        st.error("⚠️ SUPABASE_URL and SUPABASE_KEY must be set in Streamlit Secrets or .env file")
         st.stop()
     
     return create_client(supabase_url, supabase_key)
 
+@st.cache_resource
+def init_service_client():
+    """Initialize Supabase client using the service_role key for writes."""
+    # Try Streamlit secrets first (for production), then environment variables
+    supabase_url = st.secrets.get('SUPABASE_URL') or os.getenv('SUPABASE_URL')
+    service_key = st.secrets.get('SUPABASE_SERVICE_KEY') or os.getenv('SUPABASE_SERVICE_KEY')
+    
+    if not supabase_url or not service_key:
+        st.warning("⚠️ SUPABASE_SERVICE_KEY not found. License creation will fail. Please add it to Streamlit Secrets.")
+        return None
+    
+    return create_client(supabase_url, service_key)
+
 supabase = init_supabase()
+service_client = init_service_client()
 
 # Custom CSS for better styling
 st.markdown("""
@@ -102,14 +117,18 @@ def get_active_licenses():
 def create_license(client_name: str, duration_months: int, notes: Optional[str] = None) -> tuple:
     """Create a new license."""
     try:
+        # MUST use service_client for INSERT operations (bypasses RLS)
+        if service_client is None:
+            return False, None, "Service role key is missing. Please add SUPABASE_SERVICE_KEY to Streamlit Secrets."
+        
         # Calculate expiration date
         expiration_date = date.today() + timedelta(days=duration_months * 30)
         
         # Generate UUID license key
         license_key = str(uuid.uuid4())
         
-        # Insert into database
-        response = supabase.table('licenses').insert({
+        # Insert into database using service_client (bypasses RLS)
+        response = service_client.table('licenses').insert({
             'license_key': license_key,
             'client_name': client_name,
             'expiration_date': expiration_date.isoformat(),
@@ -120,14 +139,20 @@ def create_license(client_name: str, duration_months: int, notes: Optional[str] 
         if response.data:
             return True, license_key, None
         else:
-            return False, None, "Failed to create license"
+            return False, None, "Failed to create license - no data returned"
     except Exception as e:
-        return False, None, str(e)
+        error_msg = str(e)
+        # Extract error details if available
+        if isinstance(e, dict):
+            error_msg = e.get('message', str(e))
+        return False, None, error_msg
 
 def revoke_license(license_key: str) -> tuple:
     """Revoke a license by setting is_active to False."""
     try:
-        response = supabase.table('licenses')\
+        # Use service_client for UPDATE operations (bypasses RLS)
+        target_client = service_client if service_client else supabase
+        response = target_client.table('licenses')\
             .update({'is_active': False})\
             .eq('license_key', license_key)\
             .execute()

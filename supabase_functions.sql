@@ -16,23 +16,21 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 GRANT EXECUTE ON FUNCTION get_server_date() TO anon, authenticated;
 
 -- Row Level Security Policy for licenses table
--- Allow anonymous users to read their own license (by HWID)
+-- IMPORTANT: service_role bypasses RLS automatically, so no policy needed for it
+
+-- Allow anonymous users to read licenses (for license verification by HWID)
 CREATE POLICY "Allow license check by HWID"
 ON licenses FOR SELECT
 TO anon
 USING (true);  -- Allow reading for license verification
 
--- Allow authenticated users full access (for admin panel)
-CREATE POLICY "Full access for authenticated users"
-ON licenses FOR ALL
-TO authenticated
+-- Allow anonymous users to UPDATE their own license (for activation - linking HWID)
+CREATE POLICY "Allow license activation by HWID"
+ON licenses FOR UPDATE
+TO anon
 USING (true)
 WITH CHECK (true);
 
--- Allow service role full access
-CREATE POLICY "Full access for service role"
-ON licenses FOR ALL
-TO service_role
-USING (true)
-WITH CHECK (true);
+-- Note: INSERT operations require service_role key (which bypasses RLS automatically)
+-- No policy needed for service_role - it has full access by default
 
