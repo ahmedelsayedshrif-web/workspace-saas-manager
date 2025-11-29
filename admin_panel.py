@@ -27,22 +27,33 @@ def init_supabase():
     """Initialize Supabase client for read operations."""
     try:
         # Try Streamlit secrets first (for production), then environment variables
+        supabase_url = None
+        supabase_key = None
+        
         try:
-            supabase_url = st.secrets['SUPABASE_URL']
-            supabase_key = st.secrets['SUPABASE_KEY']
-        except (KeyError, AttributeError):
-            # Fallback to environment variables
+            # Try to access secrets (works in Streamlit Cloud)
+            if hasattr(st, 'secrets') and st.secrets:
+                supabase_url = st.secrets.get('SUPABASE_URL')
+                supabase_key = st.secrets.get('SUPABASE_KEY')
+        except (KeyError, AttributeError, TypeError):
+            pass
+        
+        # Fallback to environment variables (for local development)
+        if not supabase_url:
             supabase_url = os.getenv('SUPABASE_URL')
+        if not supabase_key:
             supabase_key = os.getenv('SUPABASE_KEY')
         
         if not supabase_url or not supabase_key:
             st.error("⚠️ SUPABASE_URL and SUPABASE_KEY must be set in Streamlit Secrets or .env file")
+            st.info("Please add your Supabase credentials to Streamlit Secrets (Settings → Secrets)")
             st.stop()
             return None
         
         return create_client(supabase_url, supabase_key)
     except Exception as e:
         st.error(f"❌ Error initializing Supabase: {str(e)}")
+        st.info("Please check your Supabase credentials in Streamlit Secrets")
         st.stop()
         return None
 
@@ -51,12 +62,21 @@ def init_service_client():
     """Initialize Supabase client using the service_role key for writes."""
     try:
         # Try Streamlit secrets first (for production), then environment variables
+        supabase_url = None
+        service_key = None
+        
         try:
-            supabase_url = st.secrets['SUPABASE_URL']
-            service_key = st.secrets['SUPABASE_SERVICE_KEY']
-        except (KeyError, AttributeError):
-            # Fallback to environment variables
+            # Try to access secrets (works in Streamlit Cloud)
+            if hasattr(st, 'secrets') and st.secrets:
+                supabase_url = st.secrets.get('SUPABASE_URL')
+                service_key = st.secrets.get('SUPABASE_SERVICE_KEY')
+        except (KeyError, AttributeError, TypeError):
+            pass
+        
+        # Fallback to environment variables (for local development)
+        if not supabase_url:
             supabase_url = os.getenv('SUPABASE_URL')
+        if not service_key:
             service_key = os.getenv('SUPABASE_SERVICE_KEY')
         
         if not supabase_url or not service_key:
@@ -152,7 +172,13 @@ def get_active_licenses():
             .execute()
         return response.data if response.data else []
     except Exception as e:
-        st.error(f"❌ Error fetching active licenses: {str(e)}")
+        error_msg = str(e)
+        # Check if it's an API key error
+        if '401' in error_msg or 'Invalid API key' in error_msg or 'Unauthorized' in error_msg:
+            st.error("❌ Invalid API Key. Please check your SUPABASE_KEY in Streamlit Secrets.")
+            st.info("Go to: Settings → Secrets → Add SUPABASE_KEY")
+        else:
+            st.error(f"❌ Error fetching active licenses: {error_msg}")
         return []
 
 def create_license(client_name: str, duration_months: int, notes: Optional[str] = None) -> tuple:
