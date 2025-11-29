@@ -154,10 +154,22 @@ page = st.sidebar.radio(
 def get_all_licenses():
     """Fetch all licenses from the database."""
     try:
+        if supabase is None:
+            return []
         response = supabase.table('licenses').select('*').order('created_at', desc=True).execute()
         return response.data if response.data else []
     except Exception as e:
-        st.error(f"Error fetching licenses: {str(e)}")
+        error_msg = str(e)
+        # Check if it's an API key error
+        if '401' in error_msg or 'Invalid API key' in error_msg or 'Unauthorized' in error_msg or 'JSON could not be generated' in error_msg:
+            # Only show error once using session state
+            if 'api_key_error_shown' not in st.session_state:
+                st.error("❌ Invalid API Key. Please check your SUPABASE_KEY in Streamlit Secrets.")
+                st.info("📝 **How to fix:**\n1. Go to https://share.streamlit.io/\n2. Select your app\n3. Settings → Secrets\n4. Add SUPABASE_KEY from config.env")
+                st.session_state['api_key_error_shown'] = True
+        else:
+            # Only show non-API-key errors
+            st.error(f"❌ Error fetching licenses: {error_msg}")
         return []
 
 def get_active_licenses():
